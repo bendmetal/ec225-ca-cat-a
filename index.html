@@ -117,6 +117,26 @@
     color: #fbbf24; font-size: 12px; border-radius: 8px;
     line-height: 1.5;
   }
+  .math-box {
+    margin-top: 14px; padding: 12px 14px;
+    background: rgba(88, 166, 255, 0.05); border: 1px solid rgba(88, 166, 255, 0.25);
+    color: #9ca3af; font-size: 12px; border-radius: 8px;
+    line-height: 1.7; font-variant-numeric: tabular-nums;
+  }
+  .math-box .math-title {
+    color: #58a6ff; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.8px; font-size: 10px; margin-bottom: 6px;
+  }
+  .math-box .math-row { display: flex; justify-content: space-between; gap: 12px; }
+  .math-box .math-final { color: #e6edf3; font-weight: 600; }
+  .checkbox-row { display: flex; flex-direction: column; gap: 10px; margin-top: 4px; }
+  .checkbox-label {
+    display: flex; align-items: center; gap: 10px;
+    font-size: 14px; color: #e6edf3; cursor: pointer;
+  }
+  .checkbox-label input[type="checkbox"] {
+    width: 18px; height: 18px; accent-color: #58a6ff; cursor: pointer;
+  }
   .info {
     margin-top: 14px; padding: 12px 14px;
     background: rgba(88, 166, 255, 0.06); border-left: 3px solid #58a6ff;
@@ -179,6 +199,30 @@
     </div>
   </div>
 
+  <div class="input-group">
+    <div class="input-label">Installed Equipment</div>
+    <div class="checkbox-row">
+      <label class="checkbox-label">
+        <input type="checkbox" id="hoist-installed" onchange="compute()" />
+        <span>Rescue Hoist (SUP 11.1)</span>
+      </label>
+      <label class="checkbox-label">
+        <input type="checkbox" id="eft-installed" onchange="compute()" />
+        <span>External Fuel Tanks (SUP 28)</span>
+      </label>
+    </div>
+  </div>
+
+  <div class="input-group">
+    <div class="input-label">VTOSS (kt)</div>
+    <div class="input-row">
+      <button class="stepper" onclick="adjust('vtoss', -5)" aria-label="Decrease VTOSS">−</button>
+      <input type="number" id="vtoss" value="0" step="5" min="0" max="65" inputmode="numeric" pattern="[0-9]*" />
+      <button class="stepper" onclick="adjust('vtoss', 5)" aria-label="Increase VTOSS">+</button>
+    </div>
+    <div class="input-label" style="margin-top:4px;">Applies only if Hoist and/or EFT is checked above. Corrections are cumulative if both are installed.</div>
+  </div>
+
   <div class="results">
     <div class="result-label">Max Gross Weight</div>
     <div class="result-label-sub">Takeoff &amp; Landing</div>
@@ -189,6 +233,8 @@
       </div>
     </div>
   </div>
+
+  <div id="math-box"></div>
 
   <div id="warning-box"></div>
 
@@ -218,20 +264,55 @@
   const MAX_KG = 11000;
   const KG_TO_LB = 2.20462;
 
-  // [PA_index][temp_index] = weight in kg, null = outside envelope
+  // [PA_index][temp_index] = weight in kg, capped at 11,000 (MTOW), null = outside envelope
+  // (i.e. genuinely off the printed chart -- not just "not yet digitized").
   const WEIGHT = [
     // PA=0
-    [11000, 11000, 11000, 11000, 11000, 10720, 10240, 9710, 9110],
+    [null, null, null, 11000, 11000, 10720, 10240, 9710, 9110],
     // PA=1000
-    [11000, 11000, 11000, 11000, 10850, 10350, 9890, 9380, 8790],
+    [null, null, null, 11000, 10850, 10350, 9890, 9380, 8790],
     // PA=2000
-    [11000, 11000, 11000, 11000, 10500, 10000, 9520, 9030, 8420],
+    [null, null, 11000, 10980, 10500, 10000, 9520, 9030, 8420],
     // PA=3000
-    [11000, 11000, 11000, 10590, 10100, 9630, 9160, 8680, 8160],
+    [null, 11000, 11000, 10590, 10100, 9630, 9160, 8680, 8160],
     // PA=4000
     [11000, 11000, 10650, 10180, 9700, 9290, 8790, 8330, 7960],
     // PA=5000
     [11000, 10700, 10240, 9800, 9350, 8920, 8490, 8020, 7780],
+    // PA=6000
+    [10700, 10290, 9850, 9450, 9050, 8600, 8150, 7700, 7590],
+    // PA=7000
+    [10280, 9850, 9480, 9080, 8660, 8250, 7850, null, null],
+    // PA=8000
+    [9890, 9500, 9110, 8740, 8340, null, null, null, null],
+    // PA=9000
+    [9480, 9110, 8750, 8400, 8020, null, null, null, null],
+    // PA=10000
+    [9100, 8750, 8420, 8090, null, null, null, null, null],
+    // PA=11000
+    [8750, 8410, 8100, null, null, null, null, null, null],
+    // PA=12000
+    [8390, 8100, null, null, null, null, null, null, null]
+  ];
+
+  // Uncapped ("raw") chart weight, digitized directly from the dashed-line extension
+  // of Fig 1b beyond the 11,000 kg Mmax boundary (per source table). Used to apply
+  // SUP 11.1 (Rescue Hoist) / SUP 28 (External Fuel Tanks) corrections against the
+  // true chart value rather than the MTOW-capped one. null = outside the printed
+  // chart (same envelope as WEIGHT).
+  const RAW_WEIGHT = [
+    // PA=0
+    [null, null, null, 11810, 11260, 10720, 10240, 9710, 9110],
+    // PA=1000
+    [null, null, null, 11480, 10850, 10350, 9890, 9380, 8790],
+    // PA=2000
+    [null, null, 11480, 10980, 10500, 10000, 9520, 9030, 8420],
+    // PA=3000
+    [null, 11540, 11060, 10590, 10100, 9630, 9160, 8680, 8160],
+    // PA=4000
+    [11590, 11100, 10650, 10180, 9700, 9290, 8790, 8330, 7960],
+    // PA=5000
+    [11110, 10700, 10240, 9800, 9350, 8920, 8490, 8020, 7780],
     // PA=6000
     [10700, 10290, 9850, 9450, 9050, 8600, 8150, 7700, 7590],
     // PA=7000
@@ -268,47 +349,94 @@
     const pa1 = PAS[paIdx], pa2 = PAS[paIdx + 1];
     const t1 = TEMPS[tIdx], t2 = TEMPS[tIdx + 1];
 
-    const v11 = WEIGHT[paIdx][tIdx];
-    const v12 = WEIGHT[paIdx][tIdx + 1];
-    const v21 = WEIGHT[paIdx + 1][tIdx];
-    const v22 = WEIGHT[paIdx + 1][tIdx + 1];
-
-    if (v11 == null || v12 == null || v21 == null || v22 == null) {
-      return { value: null, note: "Outside envelope" };
-    }
+    // Always interpolate on RAW_WEIGHT (the true, uncapped chart surface) rather
+    // than WEIGHT (pre-capped at 11,000). Interpolating pre-capped grid points
+    // corrupts the result near the plateau boundary: blending an already-capped
+    // 11,000 corner with a real lower-weight neighbor pulls the answer down
+    // below what the actual chart curve shows at that point. Cap only the
+    // final interpolated result, never the inputs to the interpolation.
+    const r11 = RAW_WEIGHT[paIdx][tIdx];
+    const r12 = RAW_WEIGHT[paIdx][tIdx + 1];
+    const r21 = RAW_WEIGHT[paIdx + 1][tIdx];
+    const r22 = RAW_WEIGHT[paIdx + 1][tIdx + 1];
 
     const tFrac = t2 === t1 ? 0 : (oat - t1) / (t2 - t1);
     const paFrac = pa2 === pa1 ? 0 : (pa - pa1) / (pa2 - pa1);
 
-    const v1 = v11 + (v12 - v11) * tFrac;
-    const v2 = v21 + (v22 - v21) * tFrac;
-    const kg = v1 + (v2 - v1) * paFrac;
+    // If the query point lands exactly on a table row and/or column, a missing
+    // diagonal neighbor shouldn't fail the lookup -- only the corners actually
+    // needed for that reduced interpolation have to be present.
+    const onT = (tFrac === 0 || tFrac === 1);
+    const onPa = (paFrac === 0 || paFrac === 1);
 
-    const roundedKg = Math.round(kg / 10) * 10;
-    const capped = roundedKg >= MAX_KG;
-    const finalKg = capped ? MAX_KG : roundedKg;
+    let rawKgExact; // uncapped interpolated chart weight, unrounded
+    if (onT && onPa) {
+      const v = tFrac === 0 ? (paFrac === 0 ? r11 : r21) : (paFrac === 0 ? r12 : r22);
+      if (v == null) return { value: null, note: "Outside envelope" };
+      rawKgExact = v;
+    } else if (onT) {
+      const a = tFrac === 0 ? r11 : r12;
+      const b = tFrac === 0 ? r21 : r22;
+      if (a == null || b == null) return { value: null, note: "Outside envelope" };
+      rawKgExact = a + (b - a) * paFrac;
+    } else if (onPa) {
+      const a = paFrac === 0 ? r11 : r21;
+      const b = paFrac === 0 ? r12 : r22;
+      if (a == null || b == null) return { value: null, note: "Outside envelope" };
+      rawKgExact = a + (b - a) * tFrac;
+    } else {
+      if (r11 == null || r12 == null || r21 == null || r22 == null) {
+        return { value: null, note: "Outside envelope" };
+      }
+      const v1 = r11 + (r12 - r11) * tFrac;
+      const v2 = r21 + (r22 - r21) * tFrac;
+      rawKgExact = v1 + (v2 - v1) * paFrac;
+    }
+
+    const roundedRawKg = Math.round(rawKgExact / 10) * 10;
+    const capped = roundedRawKg >= MAX_KG;
+    const finalKg = capped ? MAX_KG : roundedRawKg;
     const finalLb = Math.round(finalKg * KG_TO_LB / 10) * 10;
 
-    return { kg: finalKg, lb: finalLb, note: null, capped };
+    // Raw (uncapped) chart weight, from the digitized dashed-line extension.
+    // Only surfaced when the result landed on the plateau (finalKg === MAX_KG).
+    const rawKg = capped ? roundedRawKg : null;
+
+    return { kg: finalKg, lb: finalLb, note: null, capped, rawKg };
   }
 
   function fmt(n) {
     return n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
   }
 
+  // SUP 11.1 (Rescue Hoist) and SUP 28 (External Fuel Tanks) each use the identical
+  // formula: -10 kg per 10 kt of VTOSS, minimum -50 kg. Per SUP 11.1 §5.4 / SUP 28 §5.2,
+  // both reductions apply and are cumulative if both items are installed.
+  function vtossCorrectionKg(vtoss) {
+    if (!vtoss || vtoss <= 0) return 0;
+    const raw = (vtoss / 10) * 10; // -10kg per 10kt, linear
+    return Math.max(raw, 50); // minimum 50 kg reduction once any correction applies
+  }
+
   function compute() {
     const paEl = document.getElementById('pa');
     const oatEl = document.getElementById('oat');
+    const vtossEl = document.getElementById('vtoss');
+    const hoistEl = document.getElementById('hoist-installed');
+    const eftEl = document.getElementById('eft-installed');
     const pa = parseFloat(paEl.value);
     const oat = parseFloat(oatEl.value);
-    const kgEl = document.getElementById('kg-value');
-    const lbEl = document.getElementById('lb-value');
+    const vtoss = parseFloat(vtossEl.value) || 0;
+    const hoistInstalled = hoistEl.checked;
+    const eftInstalled = eftEl.checked;
     const weightsEl = document.getElementById('weights');
     const warnEl = document.getElementById('warning-box');
+    const mathEl = document.getElementById('math-box');
 
     if (isNaN(pa) || isNaN(oat)) {
       weightsEl.innerHTML = '<div class="weight-block"><div class="weight-value">—</div><div class="weight-unit">lb</div></div><div class="weight-block"><div class="weight-value-kg">—</div><div class="weight-unit">kg</div></div>';
       warnEl.innerHTML = '';
+      mathEl.innerHTML = '';
       return;
     }
 
@@ -317,25 +445,75 @@
     if (result.note) {
       weightsEl.innerHTML = '<div class="error-value">' + result.note + '</div>';
       warnEl.innerHTML = '';
+      mathEl.innerHTML = '';
       return;
     }
 
-    const cappedClass = result.capped ? ' capped' : '';
+    // Apply cumulative SUP 11.1 / SUP 28 correction only when the lookup landed on
+    // the 11,000 kg plateau, at least one item is checked, and we have a raw
+    // (uncapped) chart value to correct from.
+    let finalKg = result.kg;
+    let finalLb = result.lb;
+    let correctionApplied = false;
+    const itemsInstalled = (hoistInstalled ? 1 : 0) + (eftInstalled ? 1 : 0);
+    const perItemCorrection = vtossCorrectionKg(vtoss);
+    const totalCorrectionKg = perItemCorrection * itemsInstalled;
+    let correctedFromRaw = null;
+
+    if (result.capped && itemsInstalled > 0 && vtoss > 0 && result.rawKg != null) {
+      correctedFromRaw = result.rawKg - totalCorrectionKg;
+      const cappedCorrected = Math.min(correctedFromRaw, MAX_KG);
+      if (cappedCorrected < result.kg) {
+        finalKg = Math.round(cappedCorrected / 10) * 10;
+        finalLb = Math.round(finalKg * KG_TO_LB / 10) * 10;
+        correctionApplied = true;
+      }
+    }
+
+    const cappedClass = (finalKg >= MAX_KG) ? ' capped' : (correctionApplied ? ' warning' : '');
     weightsEl.innerHTML =
-      '<div class="weight-block"><div class="weight-value' + cappedClass + '">' + fmt(result.lb) + '</div><div class="weight-unit">lb</div></div>' +
-      '<div class="weight-block"><div class="weight-value-kg">' + fmt(result.kg) + '</div><div class="weight-unit">kg</div></div>';
+      '<div class="weight-block"><div class="weight-value' + cappedClass + '">' + fmt(finalLb) + '</div><div class="weight-unit">lb</div></div>' +
+      '<div class="weight-block"><div class="weight-value-kg">' + fmt(finalKg) + '</div><div class="weight-unit">kg</div></div>';
 
     const warnings = [];
-    if (result.capped) {
+    if (finalKg >= MAX_KG) {
       warnings.push('Capped at MTOW ' + fmt(Math.round(MAX_KG * KG_TO_LB)) + ' lb');
     }
     const interpolated = (pa % 1000 !== 0 || oat % 10 !== 0);
     if (interpolated) {
       warnings.push('Bilinear interpolation between chart points');
     }
+    if (itemsInstalled > 0 && vtoss > 0 && result.capped && result.rawKg == null) {
+      warnings.push('SUP correction not applied: chart value at this point is outside the digitized range.');
+    }
+    if (itemsInstalled > 0 && vtoss === 0) {
+      warnings.push('Equipment selected but VTOSS is 0 — no correction applied. Enter VTOSS to apply SUP 11.1 / SUP 28.');
+    }
     warnEl.innerHTML = warnings.length
       ? '<div class="warning">' + warnings.map(w => '• ' + w).join('<br>') + '</div>'
       : '';
+
+    // Show the correction math whenever a raw value was consulted, so the pilot
+    // can see exactly how the capped/corrected result was derived.
+    if (result.capped && result.rawKg != null) {
+      let rows = '';
+      rows += '<div class="math-row"><span>Chart value (dashed line, uncapped)</span><span>' + fmt(result.rawKg) + ' kg</span></div>';
+      if (itemsInstalled > 0 && vtoss > 0) {
+        if (hoistInstalled) {
+          rows += '<div class="math-row"><span>SUP 11.1 Hoist correction (VTOSS ' + vtoss + ' kt)</span><span>&minus;' + fmt(perItemCorrection) + ' kg</span></div>';
+        }
+        if (eftInstalled) {
+          rows += '<div class="math-row"><span>SUP 28 EFT correction (VTOSS ' + vtoss + ' kt)</span><span>&minus;' + fmt(perItemCorrection) + ' kg</span></div>';
+        }
+        rows += '<div class="math-row"><span>Corrected weight</span><span>' + fmt(Math.round(correctedFromRaw)) + ' kg</span></div>';
+        rows += '<div class="math-row math-final"><span>Result (capped at MTOW ' + fmt(MAX_KG) + ' kg)</span><span>' + fmt(finalKg) + ' kg</span></div>';
+      } else {
+        rows += '<div class="math-row math-final"><span>Result (capped at MTOW ' + fmt(MAX_KG) + ' kg, no SUP correction applied)</span><span>' + fmt(finalKg) + ' kg</span></div>';
+      }
+      mathEl.innerHTML = '<div class="math-box"><div class="math-title">How this was calculated</div>' + rows + '</div>';
+    } else {
+      mathEl.innerHTML = '';
+    }
   }
 
   function adjust(id, delta) {
@@ -351,6 +529,7 @@
 
   document.getElementById('pa').addEventListener('input', compute);
   document.getElementById('oat').addEventListener('input', compute);
+  document.getElementById('vtoss').addEventListener('input', compute);
   document.addEventListener('DOMContentLoaded', compute);
   compute();
 
