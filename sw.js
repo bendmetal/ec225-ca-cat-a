@@ -1,7 +1,7 @@
 // EC225 Category A Max T/O and Landing - Service Worker
 // Caches the app for full offline use after first load
 
-const CACHE_NAME = 'ec225-cat-a-v14';
+const CACHE_NAME = 'ec225-cat-a-v15';
 const FILES_TO_CACHE = [
   './',
   './index.html'
