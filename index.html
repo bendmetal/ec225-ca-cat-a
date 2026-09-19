@@ -193,6 +193,21 @@
   .lightbox img { max-width: 100%; max-height: 100%; border-radius: 4px; }
 
   .vtoss-row { display: flex; gap: 6px; flex-wrap: wrap; }
+  /* Hand-off to the fuel planners. Only shown when there is a real number
+     to send -- never on an outside-envelope result. */
+  .handoff-wrap { margin-top: 14px; }
+  .handoff-btn {
+    width: 100%; padding: 12px; border-radius: 9px;
+    border: 1px solid #58a6ff; background: rgba(88,166,255,0.12);
+    color: #cfe3ff; font-size: 13.5px; font-weight: 600;
+    -webkit-tap-highlight-color: transparent; cursor: pointer;
+  }
+  .handoff-btn:active { background: rgba(88,166,255,0.25); }
+  .handoff-done {
+    margin-top: 8px; font-size: 12px; color: #4ade80; line-height: 1.45; display: none;
+  }
+  .handoff-done.show { display: block; }
+
   .vtoss-btn {
     flex: 1 1 56px; padding: 10px 4px; border-radius: 8px; border: 1px solid #374151;
     background: #161b22; color: #9ca3af; font-size: 13px; font-weight: 600;
@@ -279,6 +294,11 @@
   <div id="math-box"></div>
 
   <div id="warning-box"></div>
+
+  <div class="handoff-wrap" id="handoff-wrap" style="display:none;">
+    <button class="handoff-btn" onclick="sendToFuelPlanner()">Use this weight in the Fuel Planner</button>
+    <div class="handoff-done" id="handoff-done"></div>
+  </div>
 
   <div class="info">
     <strong>Source:</strong> EC225 LP Flight Manual. VTOSS 35&ndash;60 kt: RFM Section CAT.A.A1, Figures 1b&ndash;6b (MAKILA 2A1), rev 11-51 (digitized from the RFM PDF and human-verified 2026-07-25, including dashed-line uncapped extensions and the &minus;1,000 ft row). VTOSS 65&ndash;80 kt: RFM Section 2.2.A1, Figure 1b (MAKILA 2A1), rev 11-50 (plot-identical to CAT.A.A1 Figure 7b). All: Cat A / Clear Area / MPAI Bullets Closed / No P3 Air Bleed. Bilinear interpolation on uncapped chart values; final result capped at MTOW 11,000 kg. SUP 11.1 / SUP 28 corrections applied to the uncapped value before the cap. A small cold-weather/low-altitude corner of some charts is unreadable past the chart edge and is held at the nearest known value &mdash; always at or above 11,300 kg uncapped, so the displayed result there is MTOW.
@@ -544,6 +564,80 @@
     return isNaN(v) ? 80 : Math.min(80, Math.max(65, v));
   }
 
+  // ===================================================================
+  // Shared hand-off store  (added 2026-09-19)
+  //
+  // All 15 tools are served from one origin (bendmetal.github.io), and
+  // localStorage is scoped per ORIGIN, not per folder -- so a value written
+  // here by the Cat A/B tools is readable by the fuel planners. Same
+  // property the landing page's offline download relies on.
+  //
+  // Deliberately conservative, because a stale performance number that
+  // looks authoritative is worse than no number:
+  //   * the receiving app NEVER auto-fills -- the pilot taps to accept
+  //   * every offer shows where it came from, the conditions it was
+  //     computed at, and how old it is
+  //   * anything older than MAX_AGE_MIN is not offered at all
+  // Wrapped in try/catch throughout: localStorage throws in some private
+  // browsing contexts, and a storage failure must never break a calculator.
+  // ===================================================================
+  const EC225_HANDOFF_KEY = 'ec225.handoff.maxgwt';
+  const EC225_HANDOFF_MAX_AGE_MIN = 360;   // 6 hours
+
+  function ec225SaveHandoff(payload){
+    try {
+      payload.savedAt = Date.now();
+      localStorage.setItem(EC225_HANDOFF_KEY, JSON.stringify(payload));
+      return true;
+    } catch (e) { return false; }
+  }
+  function ec225ReadHandoff(){
+    try {
+      const raw = localStorage.getItem(EC225_HANDOFF_KEY);
+      if (!raw) return null;
+      const p = JSON.parse(raw);
+      if (!p || typeof p.kg !== 'number' || !p.savedAt) return null;
+      p.ageMin = (Date.now() - p.savedAt) / 60000;
+      if (p.ageMin > EC225_HANDOFF_MAX_AGE_MIN) return null;   // too old to offer
+      return p;
+    } catch (e) { return null; }
+  }
+  function ec225ClearHandoff(){
+    try { localStorage.removeItem(EC225_HANDOFF_KEY); } catch (e) {}
+  }
+  function ec225AgeText(min){
+    if (min < 1) return 'just now';
+    if (min < 60) return Math.round(min) + ' min ago';
+    const h = min / 60;
+    if (h < 2) return '1 hour ago';
+    return Math.round(h) + ' hours ago';
+  }
+
+  // Remembers the most recent valid result so the button can send it.
+  let lastGoodResult = null;
+
+  function showHandoff(){
+    const w = document.getElementById('handoff-wrap');
+    if (w) w.style.display = '';
+  }
+  function hideHandoff(){
+    const w = document.getElementById('handoff-wrap');
+    const d = document.getElementById('handoff-done');
+    if (w) w.style.display = 'none';
+    if (d) d.classList.remove('show');
+  }
+
+  function sendToFuelPlanner(){
+    const doneEl = document.getElementById('handoff-done');
+    if (!lastGoodResult){ return; }
+    const ok = ec225SaveHandoff(lastGoodResult);
+    doneEl.innerHTML = ok
+      ? 'Saved. Open the Mission Fuel Planner or Route Fuel Planner &mdash; it will offer this weight for the CAT A/B Max Allowable GWT field.'
+      : 'Could not save on this device (storage unavailable). Note the number and enter it by hand.';
+    doneEl.style.color = ok ? '#4ade80' : '#fbbf24';
+    doneEl.classList.add('show');
+  }
+
   function compute() {
     const pa = parseFloat(document.getElementById('pa').value);
     const oat = parseFloat(document.getElementById('oat').value);
@@ -556,13 +650,18 @@
     if (isNaN(pa) || isNaN(oat)) {
       weightsEl.innerHTML = '<div class="weight-block"><div class="weight-value">\u2014</div><div class="weight-unit">lb</div></div>';
       warnEl.innerHTML = ''; mathEl.innerHTML = '';
+      lastGoodResult = null; hideHandoff();
       return;
     }
+
+    const doneEl0 = document.getElementById('handoff-done');
+    if (doneEl0) doneEl0.classList.remove('show');
 
     const result = lookup(pa, oat);
     if (result.note) {
       weightsEl.innerHTML = '<div class="error-value">' + result.note + '</div>';
       warnEl.innerHTML = ''; mathEl.innerHTML = '';
+      lastGoodResult = null; hideHandoff();
       return;
     }
 
@@ -587,6 +686,20 @@
     weightsEl.innerHTML =
       '<div class="weight-block"><div class="weight-value' + cappedClass + '">' + fmt(finalLb) + '</div><div class="weight-unit">lb</div></div>' +
       '<div class="weight-block"><div class="weight-value-kg">' + fmt(finalKg) + '</div><div class="weight-unit">kg</div></div>';
+
+    // Record this result so it can be handed to the fuel planners. The
+    // conditions string is stored with it so the receiving app can show
+    // WHAT the number was computed at, not just the number.
+    const vlabel = CHARTS[selectedVtoss].label;
+    lastGoodResult = {
+      kg: finalKg,
+      lb: finalLb,
+      category: 'A',
+      source: 'Cat A Clear Area',
+      conditions: 'VTOSS ' + vlabel + ' kt \u00b7 ' + fmt(pa) + ' ft / ' + (oat >= 0 ? '+' : '') + oat + ' \u00b0C'
+        + (itemsInstalled > 0 ? ' \u00b7 ' + (hoistInstalled && eftInstalled ? 'hoist + EFT' : (hoistInstalled ? 'hoist' : 'EFT')) : '')
+    };
+    showHandoff();
 
     const warnings = [];
     if (finalKg >= MAX_KG) {
